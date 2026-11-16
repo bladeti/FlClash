@@ -1,0 +1,79 @@
+diff --git a/adapter/outbound/reality.go b/adapter/outbound/reality.go
+index 70c7bc7..c7e88d7 100644
+--- a/adapter/outbound/reality.go
++++ b/adapter/outbound/reality.go
+@@ -14,13 +14,20 @@ type RealityOptions struct {
+ 	PublicKey string `proxy:"public-key"`
+ 	ShortID   string `proxy:"short-id,omitempty"`
+ 
+-	SupportX25519MLKEM768 bool `proxy:"support-x25519mlkem768,omitempty"`
++	// SupportX25519MLKEM768 is nil when the proxy omits
++	// reality-opts.support-x25519mlkem768. Xray-core >= 26.9.8 REALITY
++	// servers require the X25519MLKEM768 key share in the ClientHello,
++	// so an omitted value defaults to true; only an explicit false keeps
++	// the legacy behaviour for old REALITY servers that break on the
++	// hybrid share.
++	SupportX25519MLKEM768 *bool `proxy:"support-x25519mlkem768,omitempty"`
+ }
+ 
+ func (o RealityOptions) Parse() (*tlsC.RealityConfig, error) {
+ 	if o.PublicKey != "" {
+ 		config := new(tlsC.RealityConfig)
+-		config.SupportX25519MLKEM768 = o.SupportX25519MLKEM768
++		// Default on when omitted; see the field comment.
++		config.SupportX25519MLKEM768 = o.SupportX25519MLKEM768 == nil || *o.SupportX25519MLKEM768
+ 
+ 		const x25519ScalarSize = 32
+ 		publicKey, err := base64.RawURLEncoding.DecodeString(o.PublicKey)
+diff --git a/component/tls/reality.go b/component/tls/reality.go
+index ff6a0a3..707abb3 100644
+--- a/component/tls/reality.go
++++ b/component/tls/reality.go
+@@ -71,9 +71,14 @@ func GetRealityConn(ctx context.Context, conn net.Conn, fingerprint UClientHello
+ 		binary.BigEndian.PutUint64(hello.SessionId, uint64(ntp.Now().Unix()))
+ 
+ 		copy(hello.SessionId[8:], realityConfig.ShortID[:])
+-		hello.SessionId[0] = 1
+-		hello.SessionId[1] = 8
+-		hello.SessionId[2] = 2
++		// Advertised REALITY client version. Xray-core >= 26.7.11
++		// rejects the old 1.8.2 advertisement when the server sets a
++		// minimum client version (default floor 26.3.27); 26.3.27 is the
++		// wire-compatibility baseline, not a claim that this client is
++		// Xray.
++		hello.SessionId[0] = 26
++		hello.SessionId[1] = 3
++		hello.SessionId[2] = 27
+ 
+ 		//log.Debugln("REALITY hello.sessionId[:16]: %v", hello.SessionId[:16])
+ 
+diff --git a/listener/inbound/vless_test.go b/listener/inbound/vless_test.go
+index d83df33..f903573 100644
+--- a/listener/inbound/vless_test.go
++++ b/listener/inbound/vless_test.go
+@@ -8,6 +8,7 @@ import (
+ 	"github.com/metacubex/mihomo/adapter/outbound"
+ 	"github.com/metacubex/mihomo/listener/inbound"
+ 	"github.com/metacubex/mihomo/transport/vless/encryption"
++	"github.com/samber/lo"
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
+@@ -373,7 +374,7 @@ func TestInboundVless_Reality(t *testing.T) {
+ 	})
+ 	t.Run("X25519MLKEM768", func(t *testing.T) {
+ 		outboundOptions := outboundOptions
+-		outboundOptions.RealityOpts.SupportX25519MLKEM768 = true
++		outboundOptions.RealityOpts.SupportX25519MLKEM768 = lo.ToPtr(true)
+ 		testInboundVless(t, inboundOptions, outboundOptions)
+ 		t.Run("xtls-rprx-vision", func(t *testing.T) {
+ 			outboundOptions := outboundOptions
+@@ -407,7 +408,7 @@ func TestInboundVless_Reality_Grpc(t *testing.T) {
+ 	testInboundVless(t, inboundOptions, outboundOptions)
+ 	t.Run("X25519MLKEM768", func(t *testing.T) {
+ 		outboundOptions := outboundOptions
+-		outboundOptions.RealityOpts.SupportX25519MLKEM768 = true
++		outboundOptions.RealityOpts.SupportX25519MLKEM768 = lo.ToPtr(true)
+ 		testInboundVless(t, inboundOptions, outboundOptions)
+ 	})
+ }

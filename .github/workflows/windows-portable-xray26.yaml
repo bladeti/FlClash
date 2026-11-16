@@ -1,0 +1,86 @@
+name: windows-portable-xray26
+
+# One-off Windows portable build of FlClash v0.9.3 with the REALITY patch for
+# Xray-core >= 26.9.8 servers (see patches/reality-xray-26.patch) and a
+# truly portable data directory (see lib/common/path.dart).
+# Run by hand from the Actions tab; no push or tag triggers it.
+on:
+  workflow_dispatch:
+
+env:
+  FLUTTER_VERSION: '3.47.6'
+  GO_VERSION: '1.27.1'
+
+jobs:
+  windows-portable:
+    name: Windows portable zip
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Checkout submodules over HTTPS
+        shell: bash
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global core.longpaths true
+          git submodule update --init --recursive
+
+      - name: Apply REALITY patch to the vendored core
+        shell: bash
+        run: |
+          git -C core/Clash.Meta apply --check ../../patches/reality-xray-26.patch
+          git -C core/Clash.Meta apply ../../patches/reality-xray-26.patch
+          git -C core/Clash.Meta diff --stat
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            core/go.sum
+            plugins/setup/setup_hooks/lib/src/go_builder.dart
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-portable
+          workspaces: |
+            services/helper
+            plugins/rust_api/rust
+          cache-directories: .dart_tool/hooks_runner
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # The core embeds this bundle and FlClashHttpOverrides.trustCoreRoots loads it for Dart.
+      # Pinned by hash, so a new bundle from https://curl.se/docs/caextract.html is a reviewed bump.
+      - name: Fetch CA certificates
+        shell: bash
+        env:
+          CA_BUNDLE: cacert-2026-09-25.pem
+          CA_BUNDLE_SHA256: a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
+        run: |
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
+
+      - name: Build Windows portable (exe + zip)
+        run: dart setup.dart windows --env stable -v
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: flclash-windows-portable-xray26
+          path: ./dist
+          overwrite: true

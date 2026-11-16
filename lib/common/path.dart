@@ -41,10 +41,58 @@ class AppPath {
   }
 
   void _bind() {
-    _dataDir = ResolveOnce(supportDirectory);
+    _dataDir = ResolveOnce(_resolveDataDir);
     _downloadDir = ResolveOnce(downloadDirectory);
     _tempDir = ResolveOnce(temporaryDirectory);
     cacheDirectory().then(cacheDir.complete);
+  }
+
+  // The portable zip ships no unins000.exe beside the executable, while
+  // Inno Setup writes one there; the same signal isInstalledWindowsBuild
+  // in app_update.dart uses to tell the two apart.
+  Future<Directory> _resolveDataDir() async {
+    if (system.isWindows && !_isInstalledWindowsBuild) {
+      final portable = Directory(join(executableDirPath, 'data'));
+      if (await _preparePortableDir(portable)) {
+        return portable;
+      }
+    }
+    return supportDirectory();
+  }
+
+  bool get _isInstalledWindowsBuild {
+    return File(join(executableDirPath, 'unins000.exe')).existsSync();
+  }
+
+  Future<bool> _preparePortableDir(Directory portable) async {
+    try {
+      if (await portable.exists()) {
+        return true;
+      }
+      final legacy = await supportDirectory();
+      if (await legacy.exists()) {
+        final staging = Directory('${portable.path}.migrating');
+        await _copyDirectory(legacy, staging);
+        await staging.rename(portable.path);
+      } else {
+        await portable.create(recursive: true);
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _copyDirectory(Directory source, Directory target) async {
+    await target.create(recursive: true);
+    await for (final entity in source.list()) {
+      final name = basename(entity.path);
+      if (entity is Directory) {
+        await _copyDirectory(entity, Directory(join(target.path, name)));
+      } else if (entity is File) {
+        await entity.copy(join(target.path, name));
+      }
+    }
   }
 
   factory AppPath() {
@@ -94,7 +142,9 @@ class AppPath {
   Future<String> get updateDirPath async {
     final directory = system.isAndroid
         ? await downloadDirPath
-        : (await cacheDir.future).path;
+        : system.isWindows && !_isInstalledWindowsBuild
+            ? await homeDirPath
+            : (await cacheDir.future).path;
     return join(directory, 'update');
   }
 
