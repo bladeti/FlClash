@@ -143,8 +143,8 @@ class AppPath {
     final directory = system.isAndroid
         ? await downloadDirPath
         : system.isWindows && !_isInstalledWindowsBuild
-            ? await homeDirPath
-            : (await cacheDir.future).path;
+        ? await homeDirPath
+        : (await cacheDir.future).path;
     return join(directory, 'update');
   }
 
